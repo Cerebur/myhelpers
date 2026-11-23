@@ -185,7 +185,7 @@ def load_mag_data_bepi(
     # Convert the position coordinates from km to planetary radius
     df[["X", "Y", "Z"]] = df[["X", "Y", "Z"]] / planetary_radii("venus")
 
-    # Create xarray to use pyrfu computing routines
+    # Create xarray inputs for the local transformation routines
     b_vso = xr.DataArray(
         df[["Bx", "By", "Bz"]],
         coords=dict(time=df["datetime"], comp=["x", "y", "z"]),
@@ -284,10 +284,7 @@ def load_mag_data_messenger(
     messenger_data_path = data_root / "MESSENGER" / "data"
     if resolution == "high":
         high_resolution_path = (
-            messenger_data_path
-            / "MAG-3-CDR-CALIBRATED"
-            / "MSO"
-            / "SCI"
+            messenger_data_path / "MAG-3-CDR-CALIBRATED" / "MSO" / "SCI"
         )
         dates = pd.date_range(requested_start.normalize(), requested_end.normalize())
         date_strings = dates.strftime("%y%j").tolist()
@@ -398,10 +395,14 @@ def load_mag_data_messenger(
             }
         )
         df = df.loc[
-            (df["datetime"] >= requested_start)
-            & (df["datetime"] <= requested_end)
+            (df["datetime"] >= requested_start) & (df["datetime"] <= requested_end)
         ]
     else:
+        if not data_local:
+            raise Warning(
+                "Do not set data_local to False when trying to load the csv file. It takes Aaages."
+            )
+            raise
         csv_path = messenger_data_path / "MAG" / "MESSENGER_sec.csv"
         start_offset = _messenger_csv_time_offset(csv_path, requested_start)
         end_offset = _messenger_csv_time_offset(
@@ -442,15 +443,13 @@ def load_mag_data_messenger(
                 }
             )
         else:
-            df = pd.DataFrame(
-                columns=["datetime", "X", "Y", "Z", "Bx", "By", "Bz"]
-            )
+            df = pd.DataFrame(columns=["datetime", "X", "Y", "Z", "Bx", "By", "Bz"])
         file_paths = [str(csv_path)]
 
     # Convert the position coordinates from km to planetary radius
     df[["X", "Y", "Z"]] = df[["X", "Y", "Z"]] / planetary_radii("mercury")
 
-    # Create xarray to use pyrfu computing routines
+    # Create xarray inputs for the local transformation routines
     b_mso = xr.DataArray(
         df[["Bx", "By", "Bz"]],
         coords=dict(time=df["datetime"], comp=["x", "y", "z"]),
@@ -570,7 +569,7 @@ def load_Bcwt_data(
     else:
         print("Computing Wavelet")
 
-        import pyrfu
+        from myhelpers.transformation.pyrf_local import compress_cwt, wavelet
 
         nf = 100  # number of frequencies to be resolved
         if coord_system == "fac":
@@ -596,7 +595,7 @@ def load_Bcwt_data(
 
         # Compute once on small valid slice to get output shape
         test_slice = b.isel(time=slice(dummy_idx[0], dummy_idx[0] + min_segment_length))
-        test_cwt_ds = pyrfu.pyrf.wavelet(test_slice, f=[fmin_b, fmax_b], n_freqs=nf)
+        test_cwt_ds = wavelet(test_slice, f=[fmin_b, fmax_b], n_freqs=nf)
 
         # Create full NaN arrays for each variable
         cwt_full = {}
@@ -622,7 +621,7 @@ def load_Bcwt_data(
             segment_da = b.isel(time=seg)
 
             # Compute wavelet
-            seg_cwt_ds = pyrfu.pyrf.wavelet(segment_da, f=[fmin_b, fmax_b], n_freqs=nf)
+            seg_cwt_ds = wavelet(segment_da, f=[fmin_b, fmax_b], n_freqs=nf)
 
             # Align each variable
             for var in seg_cwt_ds.data_vars:
@@ -700,7 +699,7 @@ def load_Bcwt_data(
             nc = int(
                 minimum_resolution / (time_resol.astype(int))
             )  # nc is the number of timesteps to average over
-            b_cwt_t, b_cwt_x, b_cwt_y, b_cwt_z = pyrfu.pyrf.compress_cwt(b_cwt, nc)
+            b_cwt_t, b_cwt_x, b_cwt_y, b_cwt_z = compress_cwt(b_cwt, nc)
 
             options = dict(
                 coords=[b_cwt_t, b_cwt.frequency], dims=["time", "frequency"]

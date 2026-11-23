@@ -1080,6 +1080,7 @@ dependencies = [
     { name = "irfpy-util" },
     { name = "matplotlib", version = "3.10.9", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version < '3.11'" },
     { name = "matplotlib", version = "3.11.2", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version >= '3.11'" },
+    { name = "numba" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.5", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version >= '3.12'" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version < '3.11'" },
@@ -1630,10 +1631,12 @@ dependencies = [
     { name = "pandas", version = "2.3.3", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.1.1", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version >= '3.11'" },
     { name = "pip" },
-    { name = "pyrfu", version = "2.4.21", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version < '3.12'" },
-    { name = "pyrfu", version = "2.6.0", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version >= '3.12'" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version == '3.11.*'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version >= '3.12'" },
     { name = "spiceypy" },
     { name = "tol-colors" },
+    { name = "tqdm" },
     { name = "xarray", version = "2025.6.1", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version < '3.11'" },
     { name = "xarray", version = "2026.9.0", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version >= '3.11'" },
 ]
@@ -1651,12 +1654,14 @@ requires-dist = [
     { name = "irfpy-spice", specifier = ">=4.1.2", index = "https://irfpy.irf.se/simple/" },
     { name = "irfpy-util", specifier = ">=4.9.1a1", index = "https://irfpy.irf.se/simple/" },
     { name = "matplotlib", specifier = ">=3.10.9" },
+    { name = "numba", specifier = ">=0.68.1" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pip", specifier = ">=26.3" },
-    { name = "pyrfu", specifier = ">=2.4.21" },
+    { name = "scipy", specifier = ">=1.15.3" },
     { name = "spiceypy", specifier = ">=8.4.0" },
     { name = "tol-colors", specifier = ">=2.2.0" },
+    { name = "tqdm", specifier = ">=4.67.1" },
     { name = "xarray", specifier = ">=2025.6.1" },
 ]
 
@@ -2462,78 +2467,6 @@ source = { registry = "https://irfpy.irf.se/simple/" }
 sdist = { url = "https://files.pythonhosted.org/packages/e4/11/b213bebff182584360cb8d17c72c1677fec5c5c228de439e63bcf8ab1c8f/pyparsing-3.3.3.tar.gz", hash = "sha256:928ae7e20211f3b6f3915a72f06a0cfd29ab9d24279dd6346b6b1a7146397d36", size = 1050487, upload-time = "2026-09-20T20:59:05.609Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/38/bb/d215ee7c73b61497b28a5503f9f53523f294fcc936762b7caf90e0c1c2b5/pyparsing-3.3.3-py3-none-any.whl", hash = "sha256:ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4", size = 126420, upload-time = "2026-09-20T20:59:04.025Z" },
-]
-
-[[package]]
-name = "pyrfu"
-version = "2.4.21"
-source = { registry = "https://irfpy.irf.se/simple/" }
-resolution-markers = [
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11' and platform_machine == 'ARM64' and sys_platform == 'win32'",
-    "(python_full_version < '3.11' and platform_machine != 'ARM64') or (python_full_version < '3.11' and sys_platform != 'win32')",
-]
-dependencies = [
-    { name = "boto3", marker = "python_full_version < '3.12'" },
-    { name = "botocore", marker = "python_full_version < '3.12'" },
-    { name = "cdflib", marker = "python_full_version < '3.12'" },
-    { name = "geopack", marker = "python_full_version < '3.12'" },
-    { name = "keyring", marker = "python_full_version < '3.12'" },
-    { name = "keyrings-alt", marker = "python_full_version < '3.12'" },
-    { name = "matplotlib", version = "3.10.9", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version < '3.11'" },
-    { name = "matplotlib", version = "3.11.2", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numba", marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version < '3.12'" },
-    { name = "pandas", version = "2.3.3", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version < '3.11'" },
-    { name = "pandas", version = "3.1.1", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version == '3.11.*'" },
-    { name = "pycdfpp", marker = "python_full_version < '3.12'" },
-    { name = "python-dateutil", marker = "python_full_version < '3.12'" },
-    { name = "requests", marker = "python_full_version < '3.12'" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version < '3.11'" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version == '3.11.*'" },
-    { name = "tqdm", marker = "python_full_version < '3.12'" },
-    { name = "xarray", version = "2025.6.1", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version < '3.11'" },
-    { name = "xarray", version = "2026.9.0", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version == '3.11.*'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5f/74/555a8dbaaaaa2934cd73db435a7a2643831d970a22b30573d12392f3b759/pyrfu-2.4.21.tar.gz", hash = "sha256:2efc3973c3693b1e1a0c4fadb8cba5dffd778e3cdc99f87097143017cab456f0", size = 300420, upload-time = "2026-02-27T17:03:54.213Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/29/4b/dfa692288cae3f5ac278c5ef546df898bb8b5085c90bf0ab8876912f0596/pyrfu-2.4.21-py3-none-any.whl", hash = "sha256:4e2257df1458ed0c2e7bf08a35f36f8a76135167234e1179fd7f3efacd5ed697", size = 444723, upload-time = "2026-02-27T17:03:52.938Z" },
-]
-
-[[package]]
-name = "pyrfu"
-version = "2.6.0"
-source = { registry = "https://irfpy.irf.se/simple/" }
-resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-]
-dependencies = [
-    { name = "boto3", marker = "python_full_version >= '3.12'" },
-    { name = "botocore", marker = "python_full_version >= '3.12'" },
-    { name = "keyring", marker = "python_full_version >= '3.12'" },
-    { name = "keyrings-alt", marker = "python_full_version >= '3.12'" },
-    { name = "matplotlib", version = "3.11.2", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version >= '3.12'" },
-    { name = "numba", marker = "python_full_version >= '3.12'" },
-    { name = "numpy", version = "2.5.5", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version >= '3.12'" },
-    { name = "pandas", version = "3.1.1", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version >= '3.12'" },
-    { name = "platformdirs", marker = "python_full_version >= '3.12'" },
-    { name = "pycdfpp", marker = "python_full_version >= '3.12'" },
-    { name = "requests", marker = "python_full_version >= '3.12'" },
-    { name = "scipy", version = "1.18.1", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version >= '3.12'" },
-    { name = "tqdm", marker = "python_full_version >= '3.12'" },
-    { name = "urllib3", marker = "python_full_version >= '3.12'" },
-    { name = "xarray", version = "2026.9.0", source = { registry = "https://irfpy.irf.se/simple/" }, marker = "python_full_version >= '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0d/cd/c3f2e6f54fd0eaf84f9f8fd403aa2b6fad0a749c23034fc1dcc6ea23952c/pyrfu-2.6.0.tar.gz", hash = "sha256:fdbfe07e31a59353bbfb3b1d3597d0ab7adf8f57c2a5d3b1d7233cb8a85198b6", size = 777944, upload-time = "2026-11-19T08:20:10.119Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/06/30/41936770dbb0b209a9260225f797651a074621427f06f14574525765af83/pyrfu-2.6.0-py3-none-any.whl", hash = "sha256:84226ed1567720c36980b1c6fcfaf20d503b0ed2c73a22123bd22dca6085e74b", size = 897624, upload-time = "2026-11-19T08:20:08.114Z" },
 ]
 
 [[package]]

@@ -10,12 +10,14 @@ dependencies = [
     "irfpy-spice>=4.1.2",
     "irfpy-util>=4.9.1a1",
     "matplotlib>=3.10.9",
+    "numba>=0.68.1",
     "numpy>=2.2.6",
     "pandas>=2.3.3",
     "pip>=26.3",
-    "pyrfu>=2.4.21",
+    "scipy>=1.15.3",
     "spiceypy>=8.4.0",
     "tol-colors>=2.2.0",
+    "tqdm>=4.67.1",
     "xarray>=2025.6.1",
 ]
 

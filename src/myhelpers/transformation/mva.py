@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from myhelpers.transformation.pyrf_local import filt, mva as pyrf_mva
+
 
 def mva(v: Any, cdir: np.ndarray | None = None, irf: bool = True) -> tuple[Any, dict[str, Any]]:
     """Perform minimum variance analysis on a three-component time series.
@@ -13,7 +15,7 @@ def mva(v: Any, cdir: np.ndarray | None = None, irf: bool = True) -> tuple[Any, 
     Args:
         v: Input vector series with three components per sample.
         cdir: Optional projection direction; projection is currently unsupported.
-        irf: Use the ``pyrfu`` implementation when true.
+        irf: Use the local pyrfu-compatible implementation when true.
 
     Returns:
         The vector series transformed into the eigenvector basis and a mapping
@@ -44,9 +46,7 @@ def mva(v: Any, cdir: np.ndarray | None = None, irf: bool = True) -> tuple[Any, 
 
         λ3, λ2, λ1 = eigvals  # rename for clarity
     else:
-        from pyrfu.pyrf.mva import mva as mva_irf
-
-        _, eigvals, eigvecs = mva_irf(v)
+        _, eigvals, eigvecs = pyrf_mva(v)
         # Reverse eigvals to ascending order
         eigvals = eigvals[::-1]
         λ3, λ2, λ1 = eigvals
@@ -103,15 +103,13 @@ def analyze_events_mva(
     Returns:
         A DataFrame with one row for each valid frequency and jitter pair.
     """
-    import pyrfu
-
     p_start, p_end = tint
     t0 = pd.to_datetime(p_start)
     t1 = pd.to_datetime(p_end)
     jitter_runs = []
 
     for f_cut in tqdm(freq_range, desc="Frequencies"):
-        b_filt = pyrfu.pyrf.filt(b_full, 0, f_cut, 3)
+        b_filt = filt(b_full, 0, f_cut, 3)
         for dt in time_jitters_sec:
             dt_end = dt_start = dt
             sub_t0 = t0 - pd.Timedelta(seconds=dt_start)
@@ -167,14 +165,12 @@ def analyze_events_mva_gemini(
         min_lambda3_ratio: Maximum fraction of the largest eigenvalue allowed
             for the smallest eigenvalue to be considered physically plausible.
         max_lambda3_ratio: Upper bound for the intermediate-to-minimum variance ratio.
-        irf: Use the ``pyrfu`` MVA implementation when true.
+        irf: Use the local pyrfu-compatible MVA implementation when true.
         event_prefix: Prefix used to construct event identifiers.
 
     Returns:
         A summary DataFrame and per-event DataFrames for base and jitter runs.
     """
-    import pyrfu
-
     summary_results = []
     all_details = {}
 
@@ -189,7 +185,7 @@ def analyze_events_mva_gemini(
         # ------------------------------------------------------------------
         base_runs = []
         for f_cut in tqdm(freq_range, desc=f"Stage 1: Frequencies for {event_id}"):
-            b_filt = pyrfu.pyrf.filt(b_full, 0, f_cut, 3)
+            b_filt = filt(b_full, 0, f_cut, 3)
             b_slice = b_filt.sel(time=slice(t0, t1))
 
             if len(b_slice) < 4:
@@ -267,7 +263,7 @@ def analyze_events_mva_gemini(
         # ------------------------------------------------------------------
         jitter_runs = []
         for f_cut in tqdm(target_freqs, desc=f"Stage 2: Jitters for {event_id}"):
-            b_filt = pyrfu.pyrf.filt(b_full, 0, f_cut, 3)
+            b_filt = filt(b_full, 0, f_cut, 3)
 
             for dt_start in time_jitters_sec:
                 dt_end = dt_start

@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""NaN-safe replacement for pyrfu.pyrf.filt.
+"""NaN-safe adaptation of pyrfu.pyrf.filt.
 
 This module provides a drop-in replacement of the `filt` function from
 `pyrfu.pyrf.filt` which handles NaN values by temporarily interpolating
 over them, performing the filtering, and then restoring NaNs at the original
 time indices so the output has the same shape and NaN locations as the input.
 
-Functions included (copied / adapted from upstream):
+Functions adapted from upstream:
 - _ellip_coefficients
 - filt
 
@@ -17,6 +17,9 @@ Usage:
 
 The function expects an xarray.DataArray with a `time` coordinate.
 """
+
+# Adapted from pyrfu 2.4.21, Copyright (c) 2020-2026 L. Richard, MIT License.
+# See THIRD_PARTY_NOTICES.md at the project root for the full license text.
 
 # 3rd party imports
 from typing import Any
@@ -29,7 +32,7 @@ signal: Any
 
 __author__ = "Adapted by Jonathan from Louis Richard"
 __email__ = ""
-__copyright__ = ""
+__copyright__ = "Copyright (c) 2020-2026 L. Richard"
 __license__ = "MIT"
 __version__ = "0.1.0"
 __status__ = "Prototype"
@@ -140,7 +143,8 @@ def filt(
     """
     assert isinstance(inp, xr.DataArray), "inp must be a xarray.DataArray"
     
-    f_samp: Any = 1 / (np.median(np.diff(inp.time.astype(np.int64) * 1e-9)))
+    time_ns = inp.time.data.astype("datetime64[ns]").astype(np.int64)
+    f_samp: Any = 1e9 / np.median(np.diff(time_ns))
 
     # make sure we operate on floats
     inp_data = inp.data.astype(np.float64)
@@ -169,8 +173,7 @@ def filt(
 
     # time coordinate to use for interpolation
     # convert to seconds since epoch (float) for interpolation
-    time_seconds = inp.time.astype(np.int64) * 1e-9
-    time_seconds = time_seconds.astype(np.float64)
+    time_seconds = (time_ns - time_ns[0]).astype(np.float64) * 1e-9
 
     for i_col in range(inp_data.shape[1]):
         col = inp_data[:, i_col]
