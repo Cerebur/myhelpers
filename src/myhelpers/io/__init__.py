@@ -1,6 +1,7 @@
 """Functions for loading spacecraft instrument data."""
 
 from .download_MESS_data import download_messenger_data
+from .load_crossing_catalogue import load_crossing_catalogue
 from .loadB import load_Bcwt_data, load_mag_data
 from .loadELS import load_ELS_data_VEx
 from .loadIMA import load_IMA_data_VEx
@@ -14,4 +15,5 @@ __all__ = [
     "load_IMA_data_VEx",
     "load_ELS_data_VEx",
     "download_messenger_data",
+    "load_crossing_catalogue",
 ]

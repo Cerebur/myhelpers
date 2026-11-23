@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import calendar
 import re
+import subprocess
+import tempfile
 from datetime import date, datetime
+from http.client import HTTPException
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Literal, TypeAlias
@@ -13,7 +16,9 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from myhelpers.parameters.paths import DATA_PTH_REMOTE
+from myhelpers.parameters.paths import DATA_PTH_LOCAL, DATA_PTH_REMOTE
+
+DATA_PTH = DATA_PTH_REMOTE
 
 DateInput: TypeAlias = (
     str
@@ -59,7 +64,9 @@ MAG_COORDINATE_PREFIXES = {
     "VSO": "VSO",
 }
 
-DEFAULT_DOWNLOAD_PATH = Path(DATA_PTH_REMOTE) / "MESSENGER" / "data"
+DEFAULT_DOWNLOAD_PATH = Path(DATA_PTH) / "MESSENGER" / "data"
+STAGING_DIRECTORY = Path.home() / ".cache" / "myhelpers" / "messenger-staging"
+COPY_TO_NEXTCLOUD_SCRIPT = Path(__file__).with_name("copy_to_nextcloud.zsh")
 
 
 def _normalize_dates(values: DateInput) -> list[pd.Timestamp]:
@@ -94,26 +101,92 @@ def _month_directory(timestamp: pd.Timestamp) -> str:
 
 
 def _download_file(url: str, destination: Path) -> None:
-    """Download a file atomically, removing incomplete downloads."""
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary_file = destination.with_suffix(".TAB.part")
-
+    staging_file: Path | None = None
     request = Request(
         url,
         headers={"User-Agent": "Python MESSENGER MAG data downloader"},
     )
 
     try:
+        STAGING_DIRECTORY.expanduser().mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix=f"{destination.name}.",
+            suffix=".download",
+            dir=STAGING_DIRECTORY.expanduser(),
+            delete=False,
+        ) as staging:
+            staging_file = Path(staging.name)
+
+        bytes_written = 0
+        expected_size: int | None = None
+
         with urlopen(request, timeout=60) as response:
-            with temporary_file.open("wb") as file:
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    expected_size = int(content_length)
+                except ValueError as exc:
+                    raise HTTPException(
+                        f"Invalid Content-Length {content_length!r} for {url}"
+                    ) from exc
+
+            with staging_file.open("wb") as file:
                 while chunk := response.read(1024 * 1024):
                     file.write(chunk)
+                    bytes_written += len(chunk)
 
-        temporary_file.replace(destination)
+        if bytes_written == 0:
+            raise HTTPException(f"Downloaded zero bytes from {url}")
+        if expected_size is not None and bytes_written != expected_size:
+            raise HTTPException(
+                f"Incomplete HTTP download for {url}: received {bytes_written} "
+                f"bytes, expected {expected_size}"
+            )
 
-    except (HTTPError, URLError, OSError):
-        temporary_file.unlink(missing_ok=True)
-        raise
+    except (HTTPError, URLError, HTTPException) as exc:
+        print(f"HTTP download failed for {destination} from {url}: {exc}")
+        if staging_file is not None:
+            staging_file.unlink(missing_ok=True)
+        raise RuntimeError(f"HTTP download failed for {destination}: {exc}") from exc
+    except OSError as exc:
+        print(f"Local staging failed for {destination} (URL {url}): {exc}")
+        if staging_file is not None:
+            staging_file.unlink(missing_ok=True)
+        raise RuntimeError(f"Local staging failed for {destination}: {exc}") from exc
+
+    assert staging_file is not None
+    try:
+        subprocess.run(
+            [
+                "zsh",
+                str(COPY_TO_NEXTCLOUD_SCRIPT),
+                str(staging_file),
+                str(destination),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        staged_size = staging_file.stat().st_size
+        destination_size = destination.stat().st_size
+        if destination_size == 0 or destination_size != staged_size:
+            raise OSError(
+                f"Copied file size mismatch for {destination}: "
+                f"{destination_size} bytes at destination, "
+                f"{staged_size} bytes staged"
+            )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        details = ""
+        if isinstance(exc, subprocess.CalledProcessError):
+            details = (exc.stderr or exc.stdout or "").strip()
+        message = f"Nextcloud copy failed for {destination}: {exc}"
+        if details:
+            message = f"{message}\n{details}"
+        print(message)
+        print(f"Completed staging file retained for recovery: {staging_file}")
+        raise RuntimeError(message) from exc
+
+    staging_file.unlink(missing_ok=True)
 
 
 class _DirectoryParser(HTMLParser):
@@ -319,7 +392,7 @@ def download_messenger_data(
         coordinate_system: MAG coordinate system. Defaults to MSO
             when instrument="MAG". For FIPS, leave as None.
         download_path: Root directory for downloaded files.
-            Defaults to DATA_PTH_REMOTE/MESSENGER/data.
+            Defaults to DATA_PTH_LOCAL/MESSENGER/data.
         overwrite: If True, download files again even if they exist.
 
     Returns:
@@ -329,9 +402,8 @@ def download_messenger_data(
     Raises:
         ValueError: If the datetime intervals or product selections
             are invalid.
-        HTTPError: If the PDS server returns an HTTP error other
-            than 404.
-        URLError: If the PDS server cannot be reached.
+        RuntimeError: If an HTTP download, local staging operation,
+            or transfer to the destination fails.
     """
     starts = _normalize_dates(start)
     ends = _normalize_dates(end)
@@ -405,7 +477,7 @@ def download_messenger_data(
             required_files.extend(
                 _get_required_files(
                     day=day,
-                    instrument=instrument,
+                    instrument=selected_instrument,
                     data_product=data_product,
                     coordinate_system=assigned_coordinate_system,
                 )
@@ -442,6 +514,9 @@ def download_messenger_data(
 
         for url, path in pending_files:
             print(f"Downloading {path.name} ...")
+            print(f"URL: {url}")
+            print(f"Local path: {path}")
+
             _download_file(url, path)
 
         downloaded_files.extend(path for _, path in required_files if path.is_file())

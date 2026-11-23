@@ -1,0 +1,60 @@
+[project]
+name = "myhelpers"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "irfpy-aspera>=4.6.1a7",
+    "irfpy-planets>=4.1.0",
+    "irfpy-spice>=4.1.2",
+    "irfpy-util>=4.9.1a1",
+    "matplotlib>=3.10.9",
+    "numpy>=2.2.6",
+    "pandas>=2.3.3",
+    "pip>=26.3",
+    "pyrfu>=2.4.21",
+    "spiceypy>=8.4.0",
+    "tol-colors>=2.2.0",
+    "xarray>=2025.6.1",
+]
+
+
+
+[tool.pyright]
+pythonVersion = "3.10"
+venvPath = "."
+venv = ".venv"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "D",
+]
+ignore = ["E501"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[[tool.uv.index]]
+name = "irfpy"
+url = "https://irfpy.irf.se/simple/"
+
+
+[tool.uv.sources]
+irfpy-aspera = { index = "irfpy" }
+irfpy-planets = { index = "irfpy" }
+irfpy-spice = { index = "irfpy" }
+irfpy-util = { index = "irfpy" }
+
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pandas-stubs>=2.3.3.260113",
+]

@@ -73,7 +73,10 @@ def _get_orbit_numbers(times: pd.Series) -> pd.Series:
     """Find the apoapsis-to-apoapsis orbit containing each UTC timestamp."""
     orbit_boundaries = _load_orbit_boundaries()
     requested = pd.DataFrame(
-        {"datetime": pd.to_datetime(times, utc=True).to_numpy(), "_position": range(len(times))}
+        {
+            "datetime": pd.to_datetime(times, utc=True).array,
+            "_position": range(len(times)),
+        }
     )
     merged = pd.merge_asof(
         requested.sort_values("datetime"),

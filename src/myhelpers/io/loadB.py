@@ -1,6 +1,7 @@
 """Load magnetic field observations and wavelet transforms."""
 
 import glob
+import io
 import os
 import re
 from collections.abc import Hashable
@@ -12,6 +13,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from myhelpers.io.download_MESS_data import download_messenger_data
 from myhelpers.parameters.paths import DATA_PTH_LOCAL, DATA_PTH_REMOTE
 from myhelpers.parameters.planetary_parameters import planetary_radii
 
@@ -30,7 +32,8 @@ def load_mag_data(
         coordinates: Requested coordinate frame; currently only ``"vso"`` and ``"mso"`` is supported.
         data_local: Whether to search the local data directory.
         spacecraft: Spacecraft selector, either ``"bepi"`` or ``"vex"`` or ``"messenger"``.
-        **kwargs: Additional loader options passed to the Venus Express loader.
+        **kwargs: Additional loader options passed to the selected loader.
+            For MESSENGER, ``resolution`` may be ``"high"`` or ``"sec"``.
 
     Returns:
         Magnetic field data and the paths of the files that were loaded. If spacecraft == "bepi" or "messenger", a dataset containing magnetic field and position will be returned.
@@ -43,7 +46,7 @@ def load_mag_data(
     elif spacecraft == "vex":
         return load_mag_data_vex(time_interval, coordinates, data_local, **kwargs)
     elif spacecraft == "messenger":
-        return load_mag_data_messenger(time_interval, coordinates, data_local)
+        return load_mag_data_messenger(time_interval, coordinates, data_local, **kwargs)
 
 
 def load_mag_data_vex(
@@ -200,97 +203,249 @@ def load_mag_data_bepi(
     return ds, file_paths
 
 
+def _messenger_file_version(filename: str) -> int:
+    """Return the archive version encoded in a MESSENGER TAB filename."""
+    match = re.search(r"_V(\d+)\.TAB$", filename)
+    return int(match.group(1)) if match else 0
+
+
+def _messenger_csv_time_offset(
+    csv_path: Path,
+    target: pd.Timestamp,
+    *,
+    after: bool = False,
+) -> int:
+    """Find a row byte offset in the time-sorted MESSENGER seconds CSV."""
+    file_size = csv_path.stat().st_size
+    with csv_path.open("rb") as csv_file:
+        csv_file.readline()  # Skip the header.
+        low = csv_file.tell()
+        high = file_size
+
+        while low < high:
+            midpoint = (low + high) // 2
+            row_start = midpoint
+            while row_start > low:
+                csv_file.seek(row_start - 1)
+                if csv_file.read(1) == b"\n":
+                    break
+                row_start -= 1
+            csv_file.seek(row_start)
+            line = csv_file.readline()
+            if not line:
+                high = row_start
+                continue
+
+            row_end = csv_file.tell()
+            row_time = pd.Timestamp(line.rsplit(b",", 1)[-1].strip().decode())
+            is_before_target = row_time < target or (after and row_time == target)
+            if is_before_target:
+                low = row_end
+            else:
+                high = row_start
+
+    return low
+
+
 def load_mag_data_messenger(
-    time_interval: list[Any], coordinates: str = "mso", data_local: bool = False
+    time_interval: list[Any],
+    coordinates: str = "mso",
+    data_local: bool = False,
+    resolution: str = "high",
 ) -> Any:
-    """Load MESSENGER MAG observations from daily PDS4 TAB files.
+    """Load MESSENGER MAG observations from daily TAB or second-cadence CSV data.
 
     Args:
         time_interval: Mutable list containing the interval start and end times.
         coordinates: Requested frame; only ``"mso"`` is supported.
         data_local: Whether to search the local data directory.
+        resolution: Data source, either daily ``"high"`` cadence files or the
+            ``"sec"`` cadence CSV.
 
     Returns:
         A MSO magnetic field DataArray and the paths of the source files.
     """
-    if data_local:
-        DATA_PTH = DATA_PTH_LOCAL
-    else:
-        DATA_PTH = DATA_PTH_REMOTE
+    data_root = Path(DATA_PTH_LOCAL if data_local else DATA_PTH_REMOTE)
 
     if coordinates != "mso":
         raise NotImplementedError("Data is always returned in a MSO coordinate system.")
-    if (
-        type(time_interval[0]) is not pd.Timestamp
-        or type(time_interval[1]) is not pd.Timestamp
-    ):
-        print("Not a datetime format, will convert")
-        time_interval[0] = pd.to_datetime(time_interval[0])
-        time_interval[1] = pd.to_datetime(time_interval[1])
+    if resolution not in ("high", "sec"):
+        raise ValueError("MESSENGER resolution must be 'high' or 'sec'.")
+    # MESSENGER timestamps in both supported products are UTC values stored
+    # without timezone metadata. Convert aware inputs to UTC, then make them
+    # naive so they can be compared with the archive timestamps.
+    requested_start = pd.Timestamp(time_interval[0])
+    requested_end = pd.Timestamp(time_interval[1])
+    if requested_start.tz is not None:
+        requested_start = requested_start.tz_convert("UTC").tz_localize(None)
+    if requested_end.tz is not None:
+        requested_end = requested_end.tz_convert("UTC").tz_localize(None)
 
-    # Open a magnetic data file saved as TAB
-    # Check that tmin and tmax are on the same day or import all days in between
-    dates = pd.date_range(time_interval[0], time_interval[1], freq="D")
-    date_strings = dates.strftime("%y%j").tolist()
-
-    file_paths = []
-    for date_string in date_strings:
-        search_path = DATA_PTH + f"MESSENGER/data/MAG/MAGMSOSCI{date_string}_V08.TAB"
-        found_path = glob.glob(search_path)
-        if len(found_path) > 0:
-            file_paths.append(found_path[0])
-        else:
-            print("No file for date (YYDOY) " + date_string + " found.")
-
-    dfs = [
-        pd.read_csv(
-            file_path_mag,
-            delimiter=r"\s+",
-            names=[
-                "Year",
-                "DOY",
-                "Hour",
-                "Minute",
-                "Second",
-                "Timetag",
-                "x_mso",
-                "y_mso",
-                "z_mso",
-                "bx_mso",
-                "by_mso",
-                "bz_mso",
-            ],
+    messenger_data_path = data_root / "MESSENGER" / "data"
+    if resolution == "high":
+        high_resolution_path = (
+            messenger_data_path
+            / "MAG-3-CDR-CALIBRATED"
+            / "MSO"
+            / "SCI"
         )
-        for file_path_mag in file_paths
-    ]
+        dates = pd.date_range(requested_start.normalize(), requested_end.normalize())
+        date_strings = dates.strftime("%y%j").tolist()
 
-    df: pd.DataFrame = pd.concat(dfs, ignore_index=True)
+        files_by_date: dict[str, str] = {}
+        missing_dates: list[str] = []
+        for date_string in date_strings:
+            year = pd.to_datetime(date_string, format="%y%j").year
+            matches = glob.glob(
+                str(
+                    high_resolution_path
+                    / str(year)
+                    / "*"
+                    / f"MAGMSOSCI{date_string}_V*.TAB"
+                )
+            )
+            if matches:
+                files_by_date[date_string] = max(
+                    matches,
+                    key=_messenger_file_version,
+                )
+            else:
+                missing_dates.append(date_string)
 
-    # Construct datetime from year and day of year
-    df["datetime"] = pd.to_datetime(
-        df["Year"].astype(str) + df["DOY"].astype(str).str.zfill(3),
-        format="%Y%j",
-    ) + pd.to_timedelta(
-        df["Hour"] * 3600 + df["Minute"] * 60 + df["Second"],
-        unit="s",
-    )
-    # Select and rename columns
-    df = df[
-        ["datetime", "x_mso", "y_mso", "z_mso", "bx_mso", "by_mso", "bz_mso"]
-    ].rename(
-        columns={
-            "x_mso": "X",
-            "y_mso": "Y",
-            "z_mso": "Z",
-            "bx_mso": "Bx",
-            "by_mso": "By",
-            "bz_mso": "Bz",
-        }
-    )
-    # Filter for the time region we are interested in
-    df = df.loc[
-        (df["datetime"] >= time_interval[0]) & (df["datetime"] <= time_interval[1])
-    ]
+        if missing_dates:
+            print(
+                "Downloading missing MESSENGER high-resolution files for: "
+                + ", ".join(missing_dates)
+            )
+            downloaded_paths = download_messenger_data(
+                start=requested_start,
+                end=requested_end,
+                instrument="MAG",
+                data_product="SCI",
+                coordinate_system="MSO",
+                download_path=data_root / "MESSENGER" / "data",
+            )
+            for downloaded_path in downloaded_paths:
+                path = Path(downloaded_path)
+                for date_string in missing_dates:
+                    if date_string in path.name and path.suffix.upper() == ".TAB":
+                        files_by_date[date_string] = str(path)
+            for date_string in missing_dates:
+                year = pd.to_datetime(date_string, format="%y%j").year
+                matches = glob.glob(
+                    str(
+                        high_resolution_path
+                        / str(year)
+                        / "*"
+                        / f"MAGMSOSCI{date_string}_V*.TAB"
+                    )
+                )
+                if matches:
+                    files_by_date[date_string] = max(
+                        matches, key=_messenger_file_version
+                    )
+
+        file_paths = [
+            files_by_date[date_string]
+            for date_string in date_strings
+            if date_string in files_by_date
+        ]
+        if not file_paths:
+            raise FileNotFoundError(
+                f"No MESSENGER high-resolution files found for "
+                f"{requested_start} through {requested_end} "
+                f"in {high_resolution_path}"
+            )
+
+        dfs = [
+            pd.read_csv(
+                file_path,
+                delimiter=r"\s+",
+                names=[
+                    "Year",
+                    "DOY",
+                    "Hour",
+                    "Minute",
+                    "Second",
+                    "Timetag",
+                    "x_mso",
+                    "y_mso",
+                    "z_mso",
+                    "bx_mso",
+                    "by_mso",
+                    "bz_mso",
+                ],
+            )
+            for file_path in file_paths
+        ]
+        df = pd.concat(dfs, ignore_index=True)
+        df["datetime"] = pd.to_datetime(
+            df["Year"].astype(str) + df["DOY"].astype(str).str.zfill(3),
+            format="%Y%j",
+        ) + pd.to_timedelta(
+            df["Hour"] * 3600 + df["Minute"] * 60 + df["Second"], unit="s"
+        )
+        df = df[
+            ["datetime", "x_mso", "y_mso", "z_mso", "bx_mso", "by_mso", "bz_mso"]
+        ].rename(
+            columns={
+                "x_mso": "X",
+                "y_mso": "Y",
+                "z_mso": "Z",
+                "bx_mso": "Bx",
+                "by_mso": "By",
+                "bz_mso": "Bz",
+            }
+        )
+        df = df.loc[
+            (df["datetime"] >= requested_start)
+            & (df["datetime"] <= requested_end)
+        ]
+    else:
+        csv_path = messenger_data_path / "MAG" / "MESSENGER_sec.csv"
+        start_offset = _messenger_csv_time_offset(csv_path, requested_start)
+        end_offset = _messenger_csv_time_offset(
+            csv_path,
+            requested_end,
+            after=True,
+        )
+        with csv_path.open("rb") as csv_file:
+            csv_file.seek(start_offset)
+            selected_bytes = csv_file.read(max(0, end_offset - start_offset))
+
+        if selected_bytes:
+            columns = [
+                "X_MSO",
+                "Y_MSO",
+                "Z_MSO",
+                "BX_MSO",
+                "BY_MSO",
+                "BZ_MSO",
+                "Time",
+            ]
+            df = pd.read_csv(
+                io.BytesIO(selected_bytes),
+                header=None,
+                names=columns,
+                usecols=columns,
+                parse_dates=["Time"],
+                date_format="%Y-%m-%dT%H:%M:%S.%f",
+            ).rename(
+                columns={
+                    "Time": "datetime",
+                    "X_MSO": "X",
+                    "Y_MSO": "Y",
+                    "Z_MSO": "Z",
+                    "BX_MSO": "Bx",
+                    "BY_MSO": "By",
+                    "BZ_MSO": "Bz",
+                }
+            )
+        else:
+            df = pd.DataFrame(
+                columns=["datetime", "X", "Y", "Z", "Bx", "By", "Bz"]
+            )
+        file_paths = [str(csv_path)]
 
     # Convert the position coordinates from km to planetary radius
     df[["X", "Y", "Z"]] = df[["X", "Y", "Z"]] / planetary_radii("mercury")
