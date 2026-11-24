@@ -13,3 +13,17 @@ def planetary_radii(planet: str) -> float:
     radius_dict = {"venus": 6051.8, "mercury": 2439.7}
 
     return radius_dict[planet.lower()]
+
+
+def mercury_dipole_offset() -> float:
+    """Returns the dipole offset of Mercury in km.
+
+    Mercury's dipole is offset northward from the planet center along the spin axis.
+
+    Args:
+        None
+
+    Returns:
+        Dipole offset in km
+    """
+    return 479
