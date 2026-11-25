@@ -3,7 +3,7 @@
 ## pyrfu
 
 The functions in `src/myhelpers/transformation/filt.py` and
-`src/myhelpers/transformation/pyrf_local.py` are adapted from pyrfu 2.4.21,
+`src/myhelpers/transformation/pyrf_local.py` (including `psd`) are adapted from pyrfu 2.4.21,
 Copyright (c) 2020-2026 L. Richard. pyrfu is distributed under the MIT License:
 
 > Permission is hereby granted, free of charge, to any person obtaining a copy

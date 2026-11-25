@@ -14,8 +14,13 @@ import pandas as pd
 import xarray as xr
 
 from myhelpers.io.download_MESS_data import download_messenger_data
+from myhelpers.mission_info.messenger import (
+    aberrate_positions as _aberrate_positions,
+    get_orbit_numbers as _get_orbit_numbers,
+)
 from myhelpers.parameters.paths import DATA_PTH_LOCAL, DATA_PTH_REMOTE
 from myhelpers.parameters.planetary_parameters import planetary_radii
+from myhelpers.transformation import mso_to_msm
 
 
 def load_mag_data(
@@ -33,7 +38,7 @@ def load_mag_data(
         data_local: Whether to search the local data directory.
         spacecraft: Spacecraft selector, either ``"bepi"`` or ``"vex"`` or ``"messenger"``.
         **kwargs: Additional loader options passed to the selected loader.
-            For MESSENGER, ``resolution`` may be ``"high"`` or ``"sec"``.
+            For MESSENGER, ``resolution`` may be ``"high"`` or ``"sec"`` and ``aberrated`` may be ``True`` or ``False``.
 
     Returns:
         Magnetic field data and the paths of the files that were loaded. If spacecraft == "bepi" or "messenger", a dataset containing magnetic field and position will be returned.
@@ -252,23 +257,27 @@ def load_mag_data_messenger(
     coordinates: str = "mso",
     data_local: bool = False,
     resolution: str = "high",
+    aberrated: bool = False,
 ) -> Any:
     """Load MESSENGER MAG observations from daily TAB or second-cadence CSV data.
 
     Args:
         time_interval: Mutable list containing the interval start and end times.
-        coordinates: Requested frame; only ``"mso"`` is supported.
+        coordinates: Requested frame; only ``"mso"`` and ``"msm"`` is supported.
         data_local: Whether to search the local data directory.
         resolution: Data source, either daily ``"high"`` cadence files or the
             ``"sec"`` cadence CSV.
+        aberrated: Whether the coordinates should be aberration corrected
 
     Returns:
         A MSO magnetic field DataArray and the paths of the source files.
     """
     data_root = Path(DATA_PTH_LOCAL if data_local else DATA_PTH_REMOTE)
 
-    if coordinates != "mso":
-        raise NotImplementedError("Data is always returned in a MSO coordinate system.")
+    if coordinates.lower() not in ["mso", "msm"]:
+        raise NotImplementedError(
+            "Data is always returned in an MSO or MSM coordinate system."
+        )
     if resolution not in ("high", "sec"):
         raise ValueError("MESSENGER resolution must be 'high' or 'sec'.")
     # MESSENGER timestamps in both supported products are UTC values stored
@@ -445,6 +454,14 @@ def load_mag_data_messenger(
         else:
             df = pd.DataFrame(columns=["datetime", "X", "Y", "Z", "Bx", "By", "Bz"])
         file_paths = [str(csv_path)]
+
+    # If aberrated coordinates, convert them
+    if aberrated:
+        df["orbit_number"] = _get_orbit_numbers(df["datetime"])
+        df = _aberrate_positions(df)
+    # If MSM coordinates, convert them
+    if coordinates == "msm":
+        df[["X", "Y", "Z"]] = mso_to_msm(df[["X", "Y", "Z"]].to_numpy())
 
     # Convert the position coordinates from km to planetary radius
     df[["X", "Y", "Z"]] = df[["X", "Y", "Z"]] / planetary_radii("mercury")

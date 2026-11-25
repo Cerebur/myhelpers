@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from spiceypy import cyice
 
+from myhelpers.mission_info.messenger import (
+    aberrate_positions as _aberrate_positions,
+)
+from myhelpers.mission_info.messenger import (
+    get_orbit_numbers as _get_orbit_numbers,
+)
 from myhelpers.parameters import DATA_PTH_LOCAL, DATA_PTH_REMOTE
 from myhelpers.spice.load_metakernel import load_messenger_kernel
-from myhelpers.transformation.aberration import transform_to_aberrated_coordinates
 from myhelpers.transformation.coords_trafo_to_msm import mso_to_msm
 
 CTLG_DIR_REMOTE = Path(DATA_PTH_REMOTE) / "derived" / "Mercury_crossing_catalogues"
@@ -35,78 +39,7 @@ _POSSIBLE_DATASETS: dict[str, str | list[str]] = {
     ],
 }
 
-_ORB_DIR = Path(DATA_PTH_LOCAL) / "messenger" / "data" / "orbnum"
-_ABERRATION_ANGLES_FILE = (
-    Path(DATA_PTH_LOCAL) / "derived" / "messenger_orbit_aberration.csv"
-)
 _CACHE_VERSION = 2
-_ORB_LINE = re.compile(r"^\s*(\d+)\s+(\d{4}\s+[A-Z]{3}\s+\d{2}\s+\d{2}:\d{2}:\d{2})")
-_MONTHS = {
-    month: f"{number:02d}"
-    for number, month in enumerate(
-        (
-            "JAN",
-            "FEB",
-            "MAR",
-            "APR",
-            "MAY",
-            "JUN",
-            "JUL",
-            "AUG",
-            "SEP",
-            "OCT",
-            "NOV",
-            "DEC",
-        ),
-        start=1,
-    )
-}
-
-
-def _load_orbit_boundaries() -> pd.DataFrame:
-    """Read apoapsis times and orbit numbers from the MESSENGER ``.orb`` files."""
-    rows: list[tuple[pd.Timestamp, int]] = []
-    for orbit_file in sorted(_ORB_DIR.glob("*.orb")):
-        with orbit_file.open(encoding="ascii") as stream:
-            for line in stream:
-                match = _ORB_LINE.match(line)
-                if match is None:
-                    continue
-                orbit_number = int(match.group(1))
-                year, month, day, clock = match.group(2).split()
-                timestamp = pd.to_datetime(
-                    f"{year}-{_MONTHS[month]}-{day} {clock}", utc=True
-                )
-                rows.append((timestamp, orbit_number))
-
-    if not rows:
-        raise FileNotFoundError(f"No orbit-number records found in {_ORB_DIR}")
-    return (
-        pd.DataFrame(rows, columns=["apoapsis", "orbit_number"])
-        .drop_duplicates(subset="apoapsis", keep="last")
-        .sort_values("apoapsis")
-        .reset_index(drop=True)
-    )
-
-
-def _get_orbit_numbers(times: pd.Series) -> pd.Series:
-    """Find the apoapsis-to-apoapsis orbit containing each UTC timestamp."""
-    orbit_boundaries = _load_orbit_boundaries()
-    requested = pd.DataFrame(
-        {
-            "datetime": pd.to_datetime(times, utc=True).array,
-            "_position": range(len(times)),
-        }
-    )
-    merged = pd.merge_asof(
-        requested.sort_values("datetime"),
-        orbit_boundaries,
-        left_on="datetime",
-        right_on="apoapsis",
-        direction="backward",
-    )
-    merged = merged.sort_values("_position")
-    return pd.Series(pd.array(merged["orbit_number"], dtype="Int64"), index=times.index)
 
 
 def _load_spacecraft_positions(times: pd.Series) -> pd.DataFrame:
@@ -129,28 +62,6 @@ def _load_spacecraft_positions(times: pd.Series) -> pd.DataFrame:
         positions[row_indices] = year_positions
 
     return pd.DataFrame(positions, columns=columns, index=times.index)
-
-
-def _aberrate_positions(frame: pd.DataFrame) -> pd.DataFrame:
-    """Rotate MSO positions using the aberration angle for each orbit."""
-    angles = pd.read_csv(_ABERRATION_ANGLES_FILE)
-    required_columns = {"orbit_number", "aberration_angle_deg"}
-    if not required_columns.issubset(angles.columns):
-        missing = ", ".join(sorted(required_columns - set(angles.columns)))
-        raise ValueError(
-            f"Aberration-angle file {_ABERRATION_ANGLES_FILE} is missing columns: {missing}."
-        )
-
-    angle_by_orbit = angles.set_index("orbit_number")["aberration_angle_deg"]
-    orbit_angles = frame["orbit_number"].map(angle_by_orbit).to_numpy(
-        dtype=float, na_value=np.nan
-    )
-    vectors = frame[["x_mso", "y_mso", "z_mso"]].to_numpy(dtype=float)
-    transformed = transform_to_aberrated_coordinates(vectors, orbit_angles)
-
-    result = frame.copy()
-    result[["x_mso", "y_mso", "z_mso"]] = transformed
-    return result
 
 
 def _pair_rows(frame: pd.DataFrame) -> pd.DataFrame:
@@ -418,7 +329,9 @@ def load_crossing_catalogue(
         frame = frame[["index", "datetime", "orbit_number", "pair_id"]].sort_values(
             "datetime", ignore_index=True
         )
-        frame = pd.concat([frame, _load_spacecraft_positions(frame["datetime"])], axis=1)
+        frame = pd.concat(
+            [frame, _load_spacecraft_positions(frame["datetime"])], axis=1
+        )
 
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_cache_path = cache_path.with_suffix(".tmp.parquet")
@@ -426,7 +339,7 @@ def load_crossing_catalogue(
         temporary_cache_path.replace(cache_path)
 
     if aberrated:
-        frame = _aberrate_positions(frame)
+        frame = _aberrate_positions(frame, ("x_mso", "y_mso", "z_mso"))
     if coordinate_system == "msm":
         frame[["x_mso", "y_mso", "z_mso"]] = mso_to_msm(
             frame[["x_mso", "y_mso", "z_mso"]].to_numpy()

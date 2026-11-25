@@ -6,6 +6,7 @@ L. Richard). See ``THIRD_PARTY_NOTICES.md`` at the project root.
 
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from typing import Any
@@ -13,11 +14,16 @@ from typing import Any
 import numpy as np
 import xarray as xr
 from scipy import fft
+from scipy import signal
 
 from myhelpers.transformation.filt import filt
 
+logger = logging.getLogger(__name__)
 
-def mva(inp: xr.DataArray, flag: str = "mvar") -> tuple[xr.DataArray, np.ndarray, np.ndarray]:
+
+def mva(
+    inp: xr.DataArray, flag: str = "mvar"
+) -> tuple[xr.DataArray, np.ndarray, np.ndarray]:
     """Compute pyrfu-compatible minimum-variance coordinates (default MVAR)."""
     assert flag.lower() in ["mvar", "<bn>=0", "td"], "invalid method!!"
     data = inp.data
@@ -26,9 +32,7 @@ def mva(inp: xr.DataArray, flag: str = "mvar") -> tuple[xr.DataArray, np.ndarray
     moments = np.mean(data[:, idx_1] * data[:, idx_2], axis=0)
     if flag.lower() in ["mvar", "<bn>=0"]:
         moments -= np.mean(data, axis=0)[idx_1] * np.mean(data, axis=0)[idx_2]
-    matrix = np.array(
-        [moments[[0, 3, 4]], moments[[3, 1, 5]], moments[[4, 5, 2]]]
-    )
+    matrix = np.array([moments[[0, 3, 4]], moments[[3, 1, 5]], moments[[4, 5, 2]]])
     values, vectors = np.linalg.eig(matrix)
     order = values.argsort()[::-1]
     values, vectors = values[order], vectors[:, order]
@@ -67,9 +71,7 @@ def mva(inp: xr.DataArray, flag: str = "mvar") -> tuple[xr.DataArray, np.ndarray
         residual_mean = np.mean(residual, axis=0)
         moments = np.mean(residual[:, idx_1] * residual[:, idx_2], axis=0)
         moments -= residual_mean[idx_1] * residual_mean[idx_2]
-        matrix = np.array(
-            [moments[[0, 3, 4]], moments[[3, 1, 5]], moments[[4, 5, 2]]]
-        )
+        matrix = np.array([moments[[0, 3, 4]], moments[[3, 1, 5]], moments[[4, 5, 2]]])
         values, vectors = np.linalg.eig(matrix)
         order = values.argsort()[::-1]
         values, vectors = values[order], vectors[:, order]
@@ -83,6 +85,76 @@ def mva(inp: xr.DataArray, flag: str = "mvar") -> tuple[xr.DataArray, np.ndarray
 def _sampling_frequency(inp: xr.DataArray) -> float:
     times = inp.time.data.astype("datetime64[ns]").astype(np.int64)
     return 1e9 / np.median(np.diff(times))
+
+
+def psd(
+    inp: xr.DataArray,
+    n_fft: int = 256,
+    n_overlap: int | None = 128,
+    window: str = "hamming",
+    d_flag: str = "constant",
+    scaling: str = "density",
+) -> xr.DataArray:
+    """Estimate a time series' power spectral density using Welch's method.
+
+    The first dimension of ``inp`` must be time. Welch's estimate is computed
+    independently for each value in any remaining dimensions.
+
+    Args:
+        inp: Time series of scalar, vector, or tensor measurements.
+        n_fft: FFT length. It is increased when shorter than a segment.
+        n_overlap: Number of samples overlapped between segments. The segment
+            length is twice this value. ``None`` uses 256-sample segments with
+            128 samples of overlap.
+        window: Window passed to :func:`scipy.signal.welch`.
+        d_flag: Detrending method passed to :func:`scipy.signal.welch`.
+        scaling: Either ``"density"`` or ``"spectrum"``.
+
+    Returns:
+        A DataArray with frequency as its first dimension, followed by the
+        input's remaining dimensions. NaNs propagate into the corresponding
+        spectra.
+
+    Notes:
+        If you do not want your data to be split into different windows, use n_fft = n_samples, n_overlap = n_samples // 2, where n_samples is the input data length.
+    """
+    if not isinstance(inp, xr.DataArray):
+        raise TypeError("inp must be an xarray.DataArray")
+    if inp.ndim < 1 or inp.dims[0] != "time":
+        raise ValueError("the first input dimension must be 'time'")
+
+    if n_overlap is None:
+        n_persegs = 256
+        n_overlap = n_persegs // 2
+    else:
+        n_persegs = 2 * n_overlap
+
+    if n_fft < n_persegs:
+        logger.warning("nfft < n_persegs. set to n_persegs")
+        n_fft = n_persegs
+
+    freqs, p_xx = signal.welch(
+        inp.data,
+        nfft=n_fft,
+        fs=_sampling_frequency(inp),
+        window=window,
+        noverlap=n_overlap,
+        detrend=d_flag,
+        nperseg=n_persegs,
+        scaling=scaling,
+        return_onesided=True,
+        axis=0,
+    )
+
+    coords = [freqs, *[inp.coords[dim].data for dim in inp.dims[1:]]]
+    dims = ["f", *inp.dims[1:]]
+    attrs: dict[str, str] = {}
+    units = inp.attrs.get("UNITS", inp.attrs.get("units"))
+    if units:
+        power_units = f"{units}^2"
+        attrs["UNITS"] = f"{power_units}/Hz" if scaling == "density" else power_units
+
+    return xr.DataArray(p_xx, coords=coords, dims=dims, attrs=attrs)
 
 
 def wavelet(
@@ -119,7 +191,9 @@ def wavelet(
         scales = f_nyq / np.linspace(scale_number * delta_f, delta_f, scale_number)
     else:
         scale_number = n_freqs
-        scales = np.logspace(np.log10(f_nyq / f_max), np.log10(f_nyq / f_min), scale_number)
+        scales = np.logspace(
+            np.log10(f_nyq / f_max), np.log10(f_nyq / f_min), scale_number
+        )
 
     if len(inp.time.data) % 2:
         time, data = inp.time.data[:-1], inp.data[:-1, ...].astype(np.float64)
@@ -155,7 +229,9 @@ def wavelet(
         else:
             single = result
     if inp.ndim == 1:
-        return xr.DataArray(single, coords=[time, np.flip(freqs_cwt)], dims=["time", "frequency"])
+        return xr.DataArray(
+            single, coords=[time, np.flip(freqs_cwt)], dims=["time", "frequency"]
+        )
     return xr.Dataset(out_dict, coords={"time": time, "frequency": np.flip(freqs_cwt)})
 
 
@@ -165,7 +241,9 @@ def _compress_cwt_1d(cwt: np.ndarray, nc: int = 100) -> np.ndarray:
     compressed = np.zeros((len(indices), nf))
     for i, index in enumerate(indices):
         for j in range(nf):
-            compressed[i, j] = np.nanmean(cwt[index - int(nc / 2) : index + int(nc / 2), j])
+            compressed[i, j] = np.nanmean(
+                cwt[index - int(nc / 2) : index + int(nc / 2), j]
+            )
     return compressed
 
 
@@ -182,7 +260,9 @@ def _numba_compressor() -> Any:
 def compress_cwt(cwt: xr.Dataset, nc: int = 100) -> tuple[np.ndarray, ...]:
     """Average CWT samples in pyrfu-compatible windows."""
     assert isinstance(cwt, xr.Dataset), "cwt must be an xarray.Dataset"
-    indices = np.arange(int(nc / 2), len(cwt.time.data) - int(nc / 2), step=nc, dtype=np.int64)
+    indices = np.arange(
+        int(nc / 2), len(cwt.time.data) - int(nc / 2), step=nc, dtype=np.int64
+    )
     compressor = _compress_cwt_1d
     if any(np.isnan(cwt[name].data).any() for name in ("x", "y", "z")):
         compressor = _numba_compressor()
@@ -194,4 +274,4 @@ def compress_cwt(cwt: xr.Dataset, nc: int = 100) -> tuple[np.ndarray, ...]:
     )
 
 
-__all__ = ["compress_cwt", "filt", "mva", "wavelet"]
+__all__ = ["compress_cwt", "filt", "mva", "psd", "wavelet"]
