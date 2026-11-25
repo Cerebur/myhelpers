@@ -40,6 +40,7 @@ _POSSIBLE_DATASETS: dict[str, str | list[str]] = {
 }
 
 _CACHE_VERSION = 2
+_DATASET_CACHE_VERSIONS = {"Hollman2026": 3}
 
 
 def _load_spacecraft_positions(times: pd.Series) -> pd.DataFrame:
@@ -159,12 +160,43 @@ def _read_philpott(path: Path) -> pd.DataFrame:
 
 
 def _read_hollman(path: Path) -> pd.DataFrame:
-    """Read the Hollman catalogue, which does not specify crossing pairs."""
+    """Read Hollman crossings and assign indices from label and direction."""
     raw = pd.read_csv(path)
-    label_to_index = {"BS_IN": 1, "BS_OUT": 7, "MP_IN": 3, "MP_OUT": 5}
+    index_by_label_direction = {
+        ("BS_IN", "Inwards"): 1,
+        ("BS_OUT", "Inwards"): 2,
+        ("MP_IN", "Inwards"): 3,
+        ("MP_OUT", "Inwards"): 4,
+        ("MP_OUT", "Outwards"): 5,
+        ("MP_IN", "Outwards"): 6,
+        ("BS_OUT", "Outwards"): 7,
+        ("BS_IN", "Outwards"): 8,
+    }
+    unphysical_label_directions = {
+        ("UNPHYSICAL (SW -> MSp)", "Inwards"),
+        ("UNPHYSICAL (MSp -> SW)", "Outwards"),
+    }
+    label_direction = pd.Series(
+        zip(raw["Label"], raw["Trajectory Direction"]), index=raw.index
+    )
+    crossing_indices = label_direction.map(index_by_label_direction)
+    unknown = crossing_indices.isna() & ~label_direction.isin(
+        unphysical_label_directions
+    )
+    if unknown.any():
+        unknown_pairs = raw.loc[
+            unknown, ["Label", "Trajectory Direction"]
+        ].drop_duplicates()
+        raise ValueError(
+            "Unknown Hollman label/direction pair(s): "
+            + ", ".join(
+                f"({label!r}, {direction!r})"
+                for label, direction in unknown_pairs.itertuples(index=False, name=None)
+            )
+        )
     frame = pd.DataFrame(
         {
-            "index": raw["Label"].map(label_to_index).astype("Int64"),
+            "index": crossing_indices.astype("Int64"),
             "datetime": pd.to_datetime(raw["Time"], utc=True),
             "pair_id": pd.Series(pd.NA, index=raw.index, dtype="Int64"),
         }
@@ -246,10 +278,10 @@ def load_crossing_catalogue(
     """Load a Mercury crossing catalogue in a consistent tabular format.
 
     The returned table has one row per crossing and the columns ``index``,
-    ``datetime``, ``orbit_number``, ``pair_id``, ``x_mso``, ``y_mso``, and
-    ``z_mso``. Datetimes are UTC-aware. Position columns contain MSO
-    coordinates by default, or MSM coordinates when ``coords="msm"``. Positions
-    are missing when the archive does not cover a crossing time.
+    ``datetime``, ``orbit_number``, ``pair_id``, and three position columns.
+    Position column suffixes reflect the requested frame and aberration state:
+    ``_mso``, ``_msm``, ``_mso'``, or ``_msm'``. Datetimes are UTC-aware.
+    Positions are missing when the archive does not cover a crossing time.
     ``index`` follows the Winslow/Philpott convention: 1/2 are inbound bow
     shock, 3/4 inbound magnetopause, 5/6 outbound magnetopause, and 7/8
     outbound bow shock (outer/inner ordering follows the source index scheme).
@@ -258,8 +290,7 @@ def load_crossing_catalogue(
     If ``aberrated`` is ``True``, the MSO positions are rotated using the
     orbit-specific angles in ``derived/messenger_orbit_aberration.csv``.
     ``coords`` selects the position coordinate system and accepts ``"MSO"``
-    or ``"MSM"`` (case-insensitive). The position column names are retained
-    when returning MSM values.
+    or ``"MSM"`` (case-insensitive). A prime suffix marks aberrated positions.
 
     Args:
         dataset: Catalogue name: ``Winslow2013``, ``Philpott2019``,
@@ -276,9 +307,9 @@ def load_crossing_catalogue(
 
     Returns:
         A DataFrame with the catalogue columns and spacecraft position in the
-        requested coordinate system. Position columns retain the ``x_mso``,
-        ``y_mso``, and ``z_mso`` names. Missing orbit and pair numbers are
-        nullable integers.
+        requested coordinate system. Position column suffixes identify the
+        requested frame and whether aberration was applied. Missing orbit and
+        pair numbers are nullable integers.
 
     Raises:
         ValueError: If ``dataset`` or ``coords`` is unsupported, or the
@@ -294,7 +325,8 @@ def load_crossing_catalogue(
         raise ValueError("coords must be either 'MSO' or 'MSM'.")
 
     directory = CTLG_DIR_LOCAL if local else CTLG_DIR_REMOTE
-    cache_path = directory / f"{dataset}_v{_CACHE_VERSION}.parquet"
+    cache_version = _DATASET_CACHE_VERSIONS.get(dataset, _CACHE_VERSION)
+    cache_path = directory / f"{dataset}_v{cache_version}.parquet"
     if cache_path.is_file() and not resave:
         frame = pd.read_parquet(cache_path)
     else:
@@ -344,4 +376,10 @@ def load_crossing_catalogue(
         frame[["x_mso", "y_mso", "z_mso"]] = mso_to_msm(
             frame[["x_mso", "y_mso", "z_mso"]].to_numpy()
         )
-    return frame
+    position_suffix = coordinate_system + ("'" if aberrated else "")
+    return frame.rename(
+        columns={
+            f"{axis}_mso": f"{axis}_{position_suffix}"
+            for axis in ("x", "y", "z")
+        }
+    )

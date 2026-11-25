@@ -16,6 +16,11 @@ import xarray as xr
 from myhelpers.io.download_MESS_data import download_messenger_data
 from myhelpers.mission_info.messenger import (
     aberrate_positions as _aberrate_positions,
+)
+from myhelpers.mission_info.messenger import (
+    aberrate_vectors as _aberrate_vectors,
+)
+from myhelpers.mission_info.messenger import (
     get_orbit_numbers as _get_orbit_numbers,
 )
 from myhelpers.parameters.paths import DATA_PTH_LOCAL, DATA_PTH_REMOTE
@@ -258,6 +263,7 @@ def load_mag_data_messenger(
     data_local: bool = False,
     resolution: str = "high",
     aberrated: bool = False,
+    orbit_numbers: Sequence[int] | np.ndarray | pd.Series | None = None,
 ) -> Any:
     """Load MESSENGER MAG observations from daily TAB or second-cadence CSV data.
 
@@ -268,6 +274,8 @@ def load_mag_data_messenger(
         resolution: Data source, either daily ``"high"`` cadence files or the
             ``"sec"`` cadence CSV.
         aberrated: Whether the coordinates should be aberration corrected
+        orbit_numbers: Optional known orbit number for each returned sample.
+            Supplying these avoids looking up orbit numbers from the ``.orb`` files.
 
     Returns:
         A MSO magnetic field DataArray and the paths of the source files.
@@ -457,27 +465,41 @@ def load_mag_data_messenger(
 
     # If aberrated coordinates, convert them
     if aberrated:
-        df["orbit_number"] = _get_orbit_numbers(df["datetime"])
-        df = _aberrate_positions(df)
+        if orbit_numbers is None:
+            df["orbit_number"] = _get_orbit_numbers(df["datetime"])
+        else:
+            if len(orbit_numbers) != len(df):
+                raise ValueError("orbit_numbers must contain one value per sample.")
+            df["orbit_number"] = pd.Series(orbit_numbers, index=df.index)
+        df = _aberrate_positions(df, position_columns=("X", "Y", "Z"))
+        df[["Bx", "By", "Bz"]] = _aberrate_vectors(
+            df[["Bx", "By", "Bz"]].to_numpy(), df["orbit_number"]
+        )
     # If MSM coordinates, convert them
-    if coordinates == "msm":
+    if coordinates.lower() == "msm":
         df[["X", "Y", "Z"]] = mso_to_msm(df[["X", "Y", "Z"]].to_numpy())
 
     # Convert the position coordinates from km to planetary radius
     df[["X", "Y", "Z"]] = df[["X", "Y", "Z"]] / planetary_radii("mercury")
 
     # Create xarray inputs for the local transformation routines
+    output_coordinate_system = (
+        f"ABERRATED {coordinates.upper()}" if aberrated else coordinates.upper()
+    )
     b_mso = xr.DataArray(
         df[["Bx", "By", "Bz"]],
         coords=dict(time=df["datetime"], comp=["x", "y", "z"]),
         dims=["time", "comp"],
-        attrs={"Coordinate System": "MSO"},
+        attrs={"Coordinate System": output_coordinate_system},
     )
     pos_mso = xr.DataArray(
         df[["X", "Y", "Z"]],
         coords=dict(time=df["datetime"], comp=["x", "y", "z"]),
         dims=["time", "comp"],
-        attrs={"Coordinate System": "MSO", "Units": "Mercury radii"},
+        attrs={
+            "Coordinate System": output_coordinate_system,
+            "Units": "Mercury radii",
+        },
     )
     ds = xr.Dataset({"B": b_mso, "pos": pos_mso})
     return ds, file_paths

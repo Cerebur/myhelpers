@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
@@ -39,6 +41,7 @@ _MONTHS = {
 }
 
 
+@lru_cache(maxsize=1)
 def load_orbit_boundaries() -> pd.DataFrame:
     """Read apoapsis times and orbit numbers from the MESSENGER ``.orb`` files."""
     rows: list[tuple[pd.Timestamp, int]] = []
@@ -85,11 +88,9 @@ def get_orbit_numbers(times: pd.Series) -> pd.Series:
     return pd.Series(pd.array(merged["orbit_number"], dtype="Int64"), index=times.index)
 
 
-def aberrate_positions(
-    frame: pd.DataFrame,
-    position_columns: tuple[str, str, str] = ("X", "Y", "Z"),
-) -> pd.DataFrame:
-    """Rotate MSO positions using the aberration angle for each orbit."""
+@lru_cache(maxsize=1)
+def _load_aberration_angles() -> pd.Series:
+    """Load the aberration angle table once per process."""
     angles = pd.read_csv(ABERRATION_ANGLES_FILE)
     required_columns = {"orbit_number", "aberration_angle_deg"}
     if not required_columns.issubset(angles.columns):
@@ -98,12 +99,35 @@ def aberrate_positions(
             f"Aberration-angle file {ABERRATION_ANGLES_FILE} is missing columns: {missing}."
         )
 
-    angle_by_orbit = angles.set_index("orbit_number")["aberration_angle_deg"]
-    orbit_angles = frame["orbit_number"].map(angle_by_orbit).to_numpy(
+    return angles.set_index("orbit_number")["aberration_angle_deg"]
+
+
+def aberrate_vectors(
+    vectors: np.ndarray,
+    orbit_numbers: Sequence[int] | np.ndarray | pd.Series,
+) -> np.ndarray:
+    """Rotate MSO vectors using known MESSENGER orbit numbers.
+
+    This is useful when orbit numbers are already available, avoiding a fresh
+    lookup against all MESSENGER orbit-boundary files.
+    """
+    vector_array = np.asarray(vectors, dtype=float)
+    orbit_array = pd.Series(orbit_numbers)
+    if orbit_array.size != vector_array.shape[0]:
+        raise ValueError("orbit_numbers must contain one value per vector.")
+    orbit_angles = orbit_array.map(_load_aberration_angles()).to_numpy(
         dtype=float, na_value=np.nan
     )
+    return transform_to_aberrated_coordinates(vector_array, orbit_angles)
+
+
+def aberrate_positions(
+    frame: pd.DataFrame,
+    position_columns: tuple[str, str, str] = ("X", "Y", "Z"),
+) -> pd.DataFrame:
+    """Rotate MSO positions using the frame's known orbit numbers."""
     vectors = frame[list(position_columns)].to_numpy(dtype=float)
-    transformed = transform_to_aberrated_coordinates(vectors, orbit_angles)
+    transformed = aberrate_vectors(vectors, frame["orbit_number"])
 
     result = frame.copy()
     result[list(position_columns)] = transformed
@@ -113,6 +137,7 @@ def aberrate_positions(
 __all__ = [
     "ABERRATION_ANGLES_FILE",
     "ORB_DIR",
+    "aberrate_vectors",
     "aberrate_positions",
     "get_orbit_numbers",
     "load_orbit_boundaries",
